@@ -1,0 +1,25 @@
+{
+  "name": "stockup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StockUp - Smarter Sourcing Discovery Platform for Food Businesses & Beverage",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev -w apps/backend",
+    "dev:frontend": "npm run dev -w apps/frontend",
+    "build:backend": "npm run build -w apps/backend",
+    "build:frontend": "npm run build -w apps/frontend",
+    "build:shared": "npm run build -w packages/shared",
+    "build": "npm run build:shared && npm run build:backend && npm run build:frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:migrate": "npm run db:migrate -w apps/backend",
+    "db:seed": "npm run db:seed -w apps/backend",
+    "db:studio": "npm run db:studio -w apps/backend"
+  },
+  "author": "TrustEd Company",
+  "license": "UNLICENSED"
+}

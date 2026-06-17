@@ -1,0 +1,348 @@
+// =====================================================
+// StockUp - Prisma Schema
+// =====================================================
+// Database: MySQL 8.0
+// ORM: Prisma
+// =====================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// USER - Akun pengguna (semua role)
+// =====================================================
+// Menggunakan single User table dengan role enum.
+// Detail profil disimpan di tabel terpisah (BuyerProfile, SupplierProfile).
+// Alasan: Mempermudah autentikasi (satu login flow untuk semua role).
+// =====================================================
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  password        String
+  fullName        String   @map("full_name")
+  role            UserRole
+  accountStatus   AccountStatus @default(ACTIVE) @map("account_status")
+  emailVerifiedAt DateTime?     @map("email_verified_at")
+  emailVerifyToken String?      @map("email_verify_token")
+  refreshToken    String?       @db.Text @map("refresh_token")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relasi
+  buyerProfile     BuyerProfile?
+  supplierProfile  SupplierProfile?
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+
+  @@index([role])
+  @@index([accountStatus])
+  @@map("users")
+}
+
+// =====================================================
+// BUYER PROFILE - Detail profil buyer
+// =====================================================
+model BuyerProfile {
+  id           String   @id @default(uuid())
+  userId       String   @unique @map("user_id")
+  businessName String   @map("business_name")
+  phoneNumber  String   @map("phone_number")
+  address      String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relasi
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rfqs Rfq[]
+
+  @@map("buyer_profiles")
+}
+
+// =====================================================
+// SUPPLIER PROFILE - Detail profil supplier
+// =====================================================
+model SupplierProfile {
+  id                 String             @id @default(uuid())
+  userId             String             @unique @map("user_id")
+  businessName       String             @map("business_name")
+  businessAddress    String             @db.Text @map("business_address")
+  phoneNumber        String             @map("phone_number")
+  description        String?            @db.Text
+  logoUrl            String?            @map("logo_url")
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  // Relasi
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories          SupplierCategory[]
+  verifications       SupplierVerification[]
+  quotations          Quotation[]
+  badges              SupplierBadge[]
+  selectedForRfqs     Rfq[]                 @relation("SelectedSupplier")
+
+  @@map("supplier_profiles")
+}
+
+// =====================================================
+// CATEGORY - Kategori supplier
+// =====================================================
+// Dikelola oleh admin. Supplier memilih kategori yang relevan.
+// RFQ wajib memilih satu kategori (FR-006).
+// =====================================================
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relasi
+  suppliers SupplierCategory[]
+  rfqs      Rfq[]
+
+  @@map("categories")
+}
+
+// =====================================================
+// SUPPLIER CATEGORY - Relasi many-to-many supplier & category
+// =====================================================
+// Menggunakan explicit join table agar bisa menambah metadata di masa depan.
+// =====================================================
+model SupplierCategory {
+  id         String   @id @default(uuid())
+  supplierId String   @map("supplier_id")
+  categoryId String   @map("category_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relasi
+  supplier SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  category Category        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, categoryId])
+  @@index([categoryId])
+  @@map("supplier_categories")
+}
+
+// =====================================================
+// SUPPLIER VERIFICATION - Data pengajuan verifikasi
+// =====================================================
+// Supplier harus terverifikasi sebelum bisa menerima RFQ (FR-038).
+// Status: PENDING -> APPROVED/REJECTED oleh admin.
+// =====================================================
+model SupplierVerification {
+  id              String                   @id @default(uuid())
+  supplierId      String                   @map("supplier_id")
+  documentUrl     String                   @map("document_url")
+  status          SupplierVerificationStatus @default(PENDING)
+  reviewedBy      String?                  @map("reviewed_by")
+  reviewedAt      DateTime?                @map("reviewed_at")
+  rejectionReason String?                  @db.Text @map("rejection_reason")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+
+  // Relasi
+  supplier SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("supplier_verifications")
+}
+
+// =====================================================
+// RFQ - Request for Quotation
+// =====================================================
+// Core entity StockUp. Buyer membuat RFQ, didistribusikan ke
+// supplier terverifikasi pada kategori yang sesuai.
+// =====================================================
+model Rfq {
+  id                 String    @id @default(uuid())
+  buyerId            String    @map("buyer_id")
+  categoryId         String    @map("category_id")
+  title              String
+  description        String    @db.Text
+  quantity           Float?
+  unit               String?
+  budget             Float?
+  deadlineAt         DateTime  @map("deadline_at")
+  status             RfqStatus @default(OPEN)
+  selectedSupplierId String?   @map("selected_supplier_id")
+  closedAt           DateTime? @map("closed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  // Relasi
+  buyer            BuyerProfile    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  category         Category        @relation(fields: [categoryId], references: [id])
+  selectedSupplier SupplierProfile? @relation("SelectedSupplier", fields: [selectedSupplierId], references: [id])
+  quotations       Quotation[]
+
+  @@index([buyerId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([deadlineAt])
+  @@index([createdAt])
+  @@map("rfqs")
+}
+
+// =====================================================
+// QUOTATION - Penawaran dari supplier
+// =====================================================
+// Business Rules:
+// - Satu supplier hanya boleh mengirim satu quotation per RFQ (unique constraint)
+// - Hanya bisa dikirim ke RFQ yang masih Open
+// - Tidak dapat diubah setelah dikirim (MVP)
+// =====================================================
+model Quotation {
+  id                    String          @id @default(uuid())
+  rfqId                 String          @map("rfq_id")
+  supplierId            String          @map("supplier_id")
+  priceOffer            Float           @map("price_offer")
+  minimumOrderQuantity  Int?            @map("minimum_order_quantity")
+  estimatedDeliveryTime String?         @map("estimated_delivery_time")
+  unit                  String?
+  notes                 String?         @db.Text
+  status                QuotationStatus @default(SUBMITTED)
+  submittedAt           DateTime        @default(now()) @map("submitted_at")
+
+  // Relasi
+  rfq      Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  // Satu supplier hanya boleh mengirim satu quotation per RFQ (FR-044)
+  @@unique([rfqId, supplierId])
+  @@index([rfqId])
+  @@index([supplierId])
+  @@map("quotations")
+}
+
+// =====================================================
+// BADGE - Infrastruktur badge/reputasi supplier
+// =====================================================
+// v1.0: Badge manual (Verified Supplier, Verified Pro)
+// v1.5: Badge otomatis (Trusted, Responsive, Top Rated)
+// =====================================================
+model Badge {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  displayName String   @map("display_name")
+  description String?  @db.Text
+  icon        String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relasi
+  supplierBadges SupplierBadge[]
+
+  @@map("badges")
+}
+
+model SupplierBadge {
+  id         String   @id @default(uuid())
+  supplierId String   @map("supplier_id")
+  badgeId    String   @map("badge_id")
+  awardedAt  DateTime @default(now()) @map("awarded_at")
+  awardedBy  String?  @map("awarded_by")
+
+  // Relasi
+  supplier SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  badge    Badge           @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, badgeId])
+  @@index([supplierId])
+  @@map("supplier_badges")
+}
+
+// =====================================================
+// NOTIFICATION - Notifikasi in-app
+// =====================================================
+model Notification {
+  id            String   @id @default(uuid())
+  recipientId   String   @map("recipient_id")
+  type          String
+  title         String
+  message       String   @db.Text
+  isRead        Boolean  @default(false) @map("is_read")
+  referenceId   String?  @map("reference_id")
+  referenceType String?  @map("reference_type")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relasi
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// =====================================================
+// AUDIT LOG - Log aktivitas sistem
+// =====================================================
+// Mencatat: login admin, verifikasi supplier, pembuatan RFQ,
+// pengiriman quotation, perubahan status akun, dll.
+// =====================================================
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  details    String?  @db.Text
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relasi
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// =====================================================
+// ENUMS
+// =====================================================
+
+enum UserRole {
+  BUYER
+  SUPPLIER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum SupplierVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RfqStatus {
+  OPEN
+  CLOSED
+  COMPLETED
+}
+
+enum QuotationStatus {
+  SUBMITTED
+  SELECTED
+  NOT_SELECTED
+}
