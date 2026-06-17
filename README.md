@@ -228,4 +228,4 @@ User → BuyerProfile / SupplierProfile → RFQ → Quotation, Category, Badge, 
 
 ## License
 
-UNLICENSED — Private project of TrustEd Company.
+StockUp © 2026 — Private project of TrustEd Company.
